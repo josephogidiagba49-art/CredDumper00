@@ -1,19 +1,24 @@
 name: Build CredDumper EXE
-on: [push]
+on: [push, workflow_dispatch]
+
 jobs:
   build:
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+    
     - name: Setup .NET
-      uses: actions/setup-dotnet@v3
+      uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '6.0.x'
+        dotnet-version: '8.0.x'
+    
     - name: Build EXE
       run: |
-        dotnet publish -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o ./release
-    - name: Upload EXE
-      uses: actions/upload-artifact@v3
+        dotnet publish Program.cs -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=true -o ./release
+        
+    - name: Upload EXE Artifact
+      uses: actions/upload-artifact@v4
       with:
-        name: CredDumper.exe
-        path: ./release/CredDumper.exe
+        name: CredDumper-Win64
+        path: ./release/
+        retention-days: 7
